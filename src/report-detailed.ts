@@ -1,0 +1,333 @@
+/**
+ * Copyright 2025 Anoop Garlapati and RuneKit Contributors
+ * Copyright 2026 StepSecurity
+ * Licensed under the Apache License, Version 2.0 – see LICENSE in the root of this repository.
+ */
+// Detailed Report Generator for TestNG results
+
+import { TestNGSuiteResult, TestNGTestCase } from "./testng-parser";
+import { formatDuration } from "./utils";
+
+interface PackageGroup {
+  packageName: string;
+  passed: number;
+  failed: number;
+  skipped: number;
+  durationMs: number;
+  classes: Map<string, ClassGroup>;
+}
+
+interface ClassGroup {
+  className: string;
+  passed: number;
+  failed: number;
+  skipped: number;
+  durationMs: number;
+  tests: TestNGTestCase[];
+}
+
+function groupTestsByPackageAndClass(
+  suites: TestNGSuiteResult[],
+): Map<string, PackageGroup> {
+  const packageMap = new Map<string, PackageGroup>();
+
+  for (const suite of suites) {
+    for (const test of suite.testCases) {
+      const packageName =
+        test.className.substring(0, test.className.lastIndexOf(".")) ||
+        "default";
+      const simpleClassName = test.className.substring(
+        test.className.lastIndexOf(".") + 1,
+      );
+
+      if (!packageMap.has(packageName)) {
+        packageMap.set(packageName, {
+          packageName,
+          passed: 0,
+          failed: 0,
+          skipped: 0,
+          durationMs: 0,
+          classes: new Map<string, ClassGroup>(),
+        });
+      }
+
+      const packageGroup = packageMap.get(packageName)!;
+
+      if (!packageGroup.classes.has(simpleClassName)) {
+        packageGroup.classes.set(simpleClassName, {
+          className: simpleClassName,
+          passed: 0,
+          failed: 0,
+          skipped: 0,
+          durationMs: 0,
+          tests: [],
+        });
+      }
+
+      const classGroup = packageGroup.classes.get(simpleClassName)!;
+      classGroup.tests.push(test);
+
+      // Update counts and durations
+      packageGroup.durationMs += test.durationMs;
+      classGroup.durationMs += test.durationMs;
+
+      if (test.status === "PASS") {
+        packageGroup.passed++;
+        classGroup.passed++;
+      } else if (test.status === "FAIL") {
+        packageGroup.failed++;
+        classGroup.failed++;
+      } else if (test.status === "SKIP") {
+        packageGroup.skipped++;
+        classGroup.skipped++;
+      }
+    }
+  }
+
+  return packageMap;
+}
+
+function getStatusColor(status: string): string {
+  switch (status) {
+    case "PASS":
+      return "blue";
+    case "FAIL":
+      return "red";
+    case "SKIP":
+      return "grey";
+    default:
+      return "black";
+  }
+}
+
+function getStatusEmoji(status: string): string {
+  switch (status) {
+    case "PASS":
+      return "🔵"; // Blue circle
+    case "FAIL":
+      return "🔴"; // Red circle
+    case "SKIP":
+      return "🟡"; // Yellow circle
+    default:
+      return "🟡"; // Default yellow circle
+  }
+}
+
+export function generateDetailedMarkdown(suites: TestNGSuiteResult[]): string {
+  let md = `## Detailed TestNG Report\n\n`;
+
+  const packageGroups = groupTestsByPackageAndClass(suites);
+
+  // Sort packages by most failed, then skipped, then passed tests first, then alphabetically
+  const sortedPackages = Array.from(packageGroups.entries()).sort((a, b) => {
+    if (b[1].failed !== a[1].failed) {
+      return b[1].failed - a[1].failed;
+    }
+    if (b[1].skipped !== a[1].skipped) {
+      return b[1].skipped - a[1].skipped;
+    }
+    if (b[1].passed !== a[1].passed) {
+      return b[1].passed - a[1].passed;
+    }
+    return a[0].localeCompare(b[0]);
+  });
+
+  for (const [packageName, packageGroup] of sortedPackages) {
+    md += `<details>\n<summary><h3>📦 ${packageName} (${formatDuration(packageGroup.durationMs)} - ${packageGroup.failed} failed, ${packageGroup.skipped} skipped, ${packageGroup.passed} passed)</h3></summary>\n\n`;
+
+    // Sort classes by most failed, then skipped, then passed tests first, then alphabetically
+    const sortedClasses = Array.from(packageGroup.classes.entries()).sort(
+      (a, b) => {
+        if (b[1].failed !== a[1].failed) {
+          return b[1].failed - a[1].failed;
+        }
+        if (b[1].skipped !== a[1].skipped) {
+          return b[1].skipped - a[1].skipped;
+        }
+        if (b[1].passed !== a[1].passed) {
+          return b[1].passed - a[1].passed;
+        }
+        return a[0].localeCompare(b[0]);
+      },
+    );
+
+    for (const [className, classGroup] of sortedClasses) {
+      md += `<details>\n<summary><h4>📄 ${className} (${formatDuration(classGroup.durationMs)} - ${classGroup.failed} failed, ${classGroup.skipped} skipped, ${classGroup.passed} passed)</h4></summary>\n\n`;
+
+      // Sort tests by status (FAIL, SKIP, PASS), then alphabetically
+      const sortedTests = classGroup.tests.sort((a, b) => {
+        const statusOrder: { [key: string]: number } = {
+          FAIL: 1,
+          SKIP: 2,
+          PASS: 3,
+        };
+        const aStatus = statusOrder[a.status] || 4;
+        const bStatus = statusOrder[b.status] || 4;
+        if (aStatus !== bStatus) {
+          return aStatus - bStatus;
+        }
+        return a.name.localeCompare(b.name);
+      });
+
+      for (const test of sortedTests) {
+        const statusColor = getStatusColor(test.status);
+        const statusEmoji = getStatusEmoji(test.status);
+
+        // Only use collapsible sections for failed tests
+        if (test.status === "FAIL") {
+          md += `<details>\n<summary><h5>${statusEmoji} ${test.name} (${formatDuration(test.durationMs)}) - <span style=\"color:${statusColor}; font-weight:bold;\">${test.status}</span></h5></summary>\n\n`;
+
+          if (test.failureMessage) {
+            md += `**Message:**\n\n\`\`\`\n${test.failureMessage}\n\`\`\`\n\n`;
+          }
+
+          if (test.expected !== undefined || test.actual !== undefined) {
+            if (test.expected !== undefined) {
+              md += `**Expected:**\n\n\`\`\`\n${test.expected}\n\`\`\`\n\n`;
+            }
+            if (test.actual !== undefined) {
+              md += `**Actual:**\n\n\`\`\`\n${test.actual}\n\`\`\`\n\n`;
+            }
+          }
+
+          if (test.stackTrace) {
+            md += `**Stack Trace:**\n\n\`\`\`java\n${test.stackTrace}\n\`\`\`\n\n`;
+          }
+
+          if (test.groups && test.groups.length > 0) {
+            md += `**Groups:** ${test.groups.join(", ")}\n\n`;
+          }
+
+          md += `</details>\n`;
+        } else {
+          // For PASS and SKIP tests, just show a simple line without collapsible section
+          md += `${statusEmoji} <strong>${test.name}</strong> (${formatDuration(test.durationMs)}) - <span style=\"color:${statusColor}; font-weight:bold;\">${test.status}</span>`;
+
+          if (test.groups && test.groups.length > 0) {
+            md += ` - Groups: ${test.groups.join(", ")}`;
+          }
+
+          md += `\n\n`;
+        }
+      }
+
+      md += `</details>\n\n`;
+    }
+
+    md += `</details>\n\n`;
+  }
+
+  return md;
+}
+
+export function generateDetailedMarkdownFailedOnly(
+  suites: TestNGSuiteResult[],
+): string {
+  let md = `## Detailed TestNG Report\n\n`;
+  md += `> **Note:** Only failed test details are displayed due to GitHub size restrictions. Summary table above shows all test results.\n\n`;
+
+  const packageGroups = groupTestsByPackageAndClass(suites);
+
+  // Check if there are any failed tests at all
+  const totalFailures = Array.from(packageGroups.values()).reduce(
+    (sum, pkg) => sum + pkg.failed,
+    0,
+  );
+
+  if (totalFailures === 0) {
+    md += `✅ **No tests have failed.**\n\n`;
+    return md;
+  }
+
+  // Sort packages by most failed first
+  const sortedPackages = Array.from(packageGroups.entries()).sort((a, b) => {
+    if (b[1].failed !== a[1].failed) {
+      return b[1].failed - a[1].failed;
+    }
+    if (b[1].skipped !== a[1].skipped) {
+      return b[1].skipped - a[1].skipped;
+    }
+    if (b[1].passed !== a[1].passed) {
+      return b[1].passed - a[1].passed;
+    }
+    return a[0].localeCompare(b[0]);
+  });
+
+  for (const [packageName, packageGroup] of sortedPackages) {
+    // Skip packages with no failures
+    if (packageGroup.failed === 0) {
+      continue;
+    }
+
+    md += `<details>\n<summary><h3>📦 ${packageName} (${formatDuration(packageGroup.durationMs)} - ${packageGroup.failed} failed, ${packageGroup.skipped} skipped, ${packageGroup.passed} passed)</h3></summary>\n\n`;
+
+    // Sort classes by most failed first
+    const sortedClasses = Array.from(packageGroup.classes.entries()).sort(
+      (a, b) => {
+        if (b[1].failed !== a[1].failed) {
+          return b[1].failed - a[1].failed;
+        }
+        if (b[1].skipped !== a[1].skipped) {
+          return b[1].skipped - a[1].skipped;
+        }
+        if (b[1].passed !== a[1].passed) {
+          return b[1].passed - a[1].passed;
+        }
+        return a[0].localeCompare(b[0]);
+      },
+    );
+
+    for (const [className, classGroup] of sortedClasses) {
+      // Skip classes with no failures
+      if (classGroup.failed === 0) {
+        continue;
+      }
+
+      md += `<details>\n<summary><h4>📄 ${className} (${formatDuration(classGroup.durationMs)} - ${classGroup.failed} failed, ${classGroup.skipped} skipped, ${classGroup.passed} passed)</h4></summary>\n\n`;
+
+      // Only include failed tests
+      const failedTests = classGroup.tests.filter(
+        (test) => test.status === "FAIL",
+      );
+      const sortedTests = failedTests.sort((a, b) =>
+        a.name.localeCompare(b.name),
+      );
+
+      for (const test of sortedTests) {
+        const statusColor = getStatusColor(test.status);
+        const statusEmoji = getStatusEmoji(test.status);
+
+        md += `<details>\n<summary><h5>${statusEmoji} ${test.name} (${formatDuration(test.durationMs)}) - <span style=\"color:${statusColor}; font-weight:bold;\">${test.status}</span></h5></summary>\n\n`;
+
+        if (test.failureMessage) {
+          md += `**Message:**\n\n\`\`\`\n${test.failureMessage}\n\`\`\`\n\n`;
+        }
+
+        if (test.expected !== undefined || test.actual !== undefined) {
+          if (test.expected !== undefined) {
+            md += `**Expected:**\n\n\`\`\`\n${test.expected}\n\`\`\`\n\n`;
+          }
+          if (test.actual !== undefined) {
+            md += `**Actual:**\n\n\`\`\`\n${test.actual}\n\`\`\`\n\n`;
+          }
+        }
+
+        if (test.stackTrace) {
+          md += `**Stack Trace:**\n\n\`\`\`java\n${test.stackTrace}\n\`\`\`\n\n`;
+        }
+
+        if (test.groups && test.groups.length > 0) {
+          md += `**Groups:** ${test.groups.join(", ")}\n\n`;
+        }
+
+        md += `</details>\n`;
+      }
+
+      md += `</details>\n\n`;
+    }
+
+    md += `</details>\n\n`;
+  }
+
+  return md;
+}
