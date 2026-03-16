@@ -23,7 +23,7 @@
     "@actions/core": "^1.10.0",
     "@actions/github": "^6.0.0",
     "axios": "^1.13.6",
-    "fast-xml-parser": "^4.3.5",
+    "fast-xml-parser": "^5.5.5",
     "glob": "^11.0.3"
   },
   "devDependencies": {
