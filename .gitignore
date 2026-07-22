@@ -4,3 +4,4 @@ node_modules/
 coverage/
 dist/src/
 dist/__tests__/
+.idea
